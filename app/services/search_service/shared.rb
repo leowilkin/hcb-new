@@ -6,7 +6,8 @@ module SearchService
       {
         "org"          => "organization",
         "organisation" => "organization",
-        "txn"          => "transaction"
+        "txn"          => "transaction",
+        "reimb"        => "reimbursement",
       }
     end
 

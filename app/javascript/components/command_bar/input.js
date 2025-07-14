@@ -85,6 +85,14 @@ const renderer = createRegexRenderer([
       outline: '2px solid var(--command-bar-reimbursement)',
     },
   ],
+  [
+    /@reimb(?=\s|$)/g,
+    {
+      borderRadius: '3px',
+      backgroundColor: 'var(--command-bar-reimbursement)',
+      outline: '2px solid var(--command-bar-reimbursement)',
+    },
+  ],
   [/\[[^\]]*\]/g, { borderRadius: '3px', backgroundColor: '#abdea9' }],
 ])
 

@@ -495,7 +495,7 @@ export const adminActions = adminUrls => [
     section: 'Admin Tools',
     priority: Priority.HIGH,
     name: 'Flipper',
-    icon: <Icon glyph="flag-fill" size={16} />,
+    icon: <Icon glyph="flag" size={16} />,
     perform: navigate('/flipper/features'),
   },
 ]
