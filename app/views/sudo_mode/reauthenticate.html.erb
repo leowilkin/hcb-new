@@ -1,13 +1,19 @@
 <% content_for(:container_class, "container--sm py-20") %>
 
-<% content_for(:head) do %>
-  <%#
-    If sudo mode is triggered from within a Turbo frame, the default behaviour
-    would be to render the response within that frame. This meta tag tells Turbo
-    to treat it as a full page navigation.
-    https://turbo.hotwired.dev/handbook/frames#%E2%80%9Cbreaking-out%E2%80%9D-from-a-frame
-  %>
-  <meta name="turbo-visit-control" content="reload">
+<%#
+  If sudo mode is triggered from within a Turbo frame, the default behaviour
+  would be to render the response within that frame. This meta tag tells Turbo
+  to treat it as a full page navigation.
+  https://turbo.hotwired.dev/handbook/frames#%E2%80%9Cbreaking-out%E2%80%9D-from-a-frame
+
+  Note that we only do this for GET requests as in the case of a POST this
+  results in a subsequent GET request being made to the same path, which breaks
+  the interception flow (and often results in a 404).
+%>
+<% if break_out_of_turbo_frame %>
+  <% content_for(:head) do %>
+    <meta name="turbo-visit-control" content="reload">
+  <% end %>
 <% end %>
 
 <div class="flex">
@@ -21,15 +27,17 @@
 <%= user_mention(current_user, class: "badge bg-muted pl-1 m-0 tooltipped") %>
 
 <%= form_tag(
-      request.path,
-      method: request.request_method_symbol,
+      form_action,
+      method: form_method,
       data: {
         controller: ("webauthn-reauth" if default_factor == :webauthn),
         webauthn_reauth_options_url_value: webauthn_auth_options_users_path(email: current_user.email),
       }
     ) do %>
-  <% forwarded_params.each do |name, value| %>
-    <%= hidden_field_tag(name, value) %>
+  <% forwarded_params.each do |name, values| %>
+    <% values.each do |value| %>
+      <%= hidden_field_tag(name, value) %>
+    <% end %>
   <% end %>
 
   <%= hidden_field_tag("_sudo[login_id]", login.hashid) %>
@@ -42,12 +50,13 @@
          required: true,
          autofocus: true,
          autocomplete: "one-time-code",
+         inputmode: "numeric",
        )
      } %>
 
   <% case default_factor %>
   <% when :email %>
-    <p>
+    <p class="mt-0">
       For additional security, we've just sent a login code to <%= mail_to(current_user.email, target: "_blank") %>
     </p>
 
@@ -55,19 +64,19 @@
 
     <p class="h5 muted"><em>Make sure to check your spam folder</em></p>
   <% when :sms %>
-    <p>
+    <p class="mt-0">
       For additional security, we've just sent a login code to your phone number ending in <%= current_user.phone_number.last(4) %>
     </p>
 
     <%= code_field.call(placeholder: "Enter your login code") %>
   <% when :totp %>
-    <p>
+    <p class="mt-0">
       For additional security, please enter the code from your authenticator app.
     </p>
 
     <%= code_field.call(placeholder: "Enter your one-time password") %>
   <% when :webauthn %>
-    <p>
+    <p class="mt-0">
       For additional security, please authenticate with your security key.
     </p>
 

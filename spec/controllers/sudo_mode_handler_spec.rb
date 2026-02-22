@@ -8,13 +8,14 @@ RSpec.describe SudoModeHandler do
   render_views(true)
 
   controller(ApplicationController) do
+    skip_after_action :verify_authorized
+    before_action :enforce_sudo_mode
+
+    def index
+      render(status: :ok, plain: "Index")
+    end
+
     def create
-      skip_authorization
-
-      unless enforce_sudo_mode
-        return
-      end
-
       render(status: :created, plain: "Created")
     end
   end
@@ -25,9 +26,8 @@ RSpec.describe SudoModeHandler do
       Flipper.enable(:sudo_mode_2015_07_21, user) if feature_enabled
 
       user_session = sign_in(user)
-      login = user_session.initial_login
 
-      { user:, user_session:, login: }
+      { user:, user_session: }
     end
   end
 
@@ -66,8 +66,12 @@ RSpec.describe SudoModeHandler do
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
+
+      form = response.parsed_body.css("form").sole
+      expect(form.attr("action")).to eq("/anonymous")
+      expect(form.attr("method")).to eq("post")
     end
 
     it "allows the request to proceed if the user does not have the feature enabled" do
@@ -84,7 +88,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(extract_submit_method(response)).to eq("email")
     end
@@ -98,7 +102,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(extract_submit_method(response)).to eq("sms")
     end
@@ -114,7 +118,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(extract_submit_method(response)).to eq("email")
     end
@@ -128,7 +132,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create, params: { _sudo: { switch_method: "email" } })
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(extract_submit_method(response)).to eq("email")
     end
@@ -154,7 +158,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
 
       # If there isn't an explicit user preference we favor WebAuthn
@@ -185,7 +189,7 @@ RSpec.describe SudoModeHandler do
 
       post(:create, params:)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
 
       form_params =
@@ -206,19 +210,45 @@ RSpec.describe SudoModeHandler do
       )
     end
 
+    it "intercepts GET requests via a different endpoint" do
+      logged_in_context
+
+      get(:index, params: { q: "dinosaurs", sort_by: "name", sort_direction: "asc" })
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(response.body).to include("Confirm Access")
+
+      form = response.parsed_body.css("form").sole
+      expect(form.attr("action")).to eq(reauthenticate_logins_path)
+      expect(form.attr("method")).to eq("post")
+
+      form_params =
+        response
+        .parsed_body
+        .css("form [name]")
+        .map { |el| [el.attr("name"), el.attr("value")] }
+        .reject { |(name, _)| name.start_with?("_sudo") }
+
+      expect(form_params).to eq(
+        [
+          ["return_to", "/anonymous?q=dinosaurs&sort_by=name&sort_direction=asc"]
+        ]
+      )
+    end
+
     it "creates a new login" do
-      logged_in_context => { user:, login: initial_login }
+      logged_in_context => { user: }
 
       post(:create)
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
 
       login_id = response.parsed_body.css("[name='_sudo[login_id]']").sole.attr("value")
       login = Login.find_by_hashid!(login_id)
 
       expect(login.user).to eq(user)
-      expect(login.initial_login).to eq(initial_login)
+      expect(login.is_reauthentication).to eq(true)
       expect(login).to be_incomplete
     end
   end
@@ -229,9 +259,21 @@ RSpec.describe SudoModeHandler do
 
       post(:create, params: { _sudo: { login_id: "nope", submit_method: "email" } })
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(flash[:error]).to eq("Login has expired. Please try again.")
+    end
+
+    it "errors if the login id is for an initial login" do
+      logged_in_context => { user: }
+      login = create(:login, user:, is_reauthentication: false)
+
+      post(:create, params: { _sudo: { login_id: login.hashid, submit_method: "email" } })
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(response.body).to include("Confirm Access")
+      expect(flash[:error]).to eq("Login has expired. Please try again.")
+
     end
 
     def stub_login_service(&)
@@ -248,8 +290,8 @@ RSpec.describe SudoModeHandler do
     end
 
     it "handles email codes" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user:, user_session: }
+      login = create(:login, user:, is_reauthentication: true)
 
       stub_login_service do |instance, service_login|
         expect(instance).to(
@@ -276,8 +318,8 @@ RSpec.describe SudoModeHandler do
     end
 
     it "handles sms codes" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user:, user_session: }
+      login = create(:login, user:, is_reauthentication: true)
 
       stub_login_service do |instance, service_login|
         expect(instance).to(
@@ -304,8 +346,8 @@ RSpec.describe SudoModeHandler do
     end
 
     it "handles totp codes" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user:, user_session: }
+      login = create(:login, user:, is_reauthentication: true)
 
       stub_login_service do |instance, service_login|
         expect(instance).to(
@@ -332,8 +374,8 @@ RSpec.describe SudoModeHandler do
     end
 
     it "handles webauthn" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user:, user_session: }
+      login = create(:login, user:, is_reauthentication: true)
 
       session[:webauthn_challenge] = "WEBAUTHN_CHALLENGE"
 
@@ -365,8 +407,8 @@ RSpec.describe SudoModeHandler do
     end
 
     it "rejects invalid methods" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user:, user_session: }
+      login = create(:login, user:, is_reauthentication: true)
 
       expect do
         post(
@@ -379,15 +421,15 @@ RSpec.describe SudoModeHandler do
             }
           }
         )
-      end.to raise_error(ActionController::ParameterMissing, "param is missing or the value is empty: submit_method")
+      end.to raise_error(ActionController::ParameterMissing, "param is missing or the value is empty or invalid: submit_method")
 
       expect(login.reload).not_to be_complete
       expect(user_session.reload).not_to be_sudo_mode
     end
 
     it "handles login failures" do
-      logged_in_context => { user:, login: initial_login, user_session: }
-      login = create(:login, user:, initial_login:)
+      logged_in_context => { user: }
+      login = create(:login, user:, is_reauthentication: true)
 
       stub_login_service do |instance, _service_login|
         expect(instance).to(
@@ -413,7 +455,7 @@ RSpec.describe SudoModeHandler do
         }
       )
 
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unauthorized)
       expect(response.body).to include("Confirm Access")
       expect(flash[:error]).to eq("Turn it off and on again")
     end

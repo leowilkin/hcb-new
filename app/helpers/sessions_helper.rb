@@ -2,17 +2,20 @@
 
 module SessionsHelper
   SESSION_DURATION_OPTIONS = {
-    "1 hour"  => 1.hour.to_i,
-    "1 day"   => 1.day.to_i,
-    "3 days"  => 3.days.to_i,
-    "7 days"  => 7.days.to_i,
-    "14 days" => 14.days.to_i,
-    "30 days" => 30.days.to_i
+    "15 minutes" => 15.minutes.to_i,
+    "1 hour"     => 1.hour.to_i,
+    "6 hours"    => 6.hours.to_i,
+    "1 day"      => 1.day.to_i,
+    "3 days"     => 3.days.to_i,
+    "1 week"     => 1.week.to_i,
+    "2 weeks"    => 2.weeks.to_i,
   }.freeze
 
   # For security reasons we severely restrict the duration of impersonated
   # sessions
   IMPERSONATED_SESSION_DURATION = SESSION_DURATION_OPTIONS.fetch("1 hour")
+
+  class AccountLockedError < StandardError; end
 
   def impersonate_user(user)
     sign_out
@@ -32,10 +35,10 @@ module SessionsHelper
       if impersonate
         IMPERSONATED_SESSION_DURATION
       else
-        user.session_duration_seconds
+        user.session_validity_preference
       end
-    expiration_at = Time.now + session_duration
-    cookies.encrypted[:session_token] = { value: session_token, expires: expiration_at }
+    expiration_at = session_duration.seconds.from_now
+    cookies.encrypted[:session_token] = { value: session_token, expires: User::Session::MAX_SESSION_DURATION.from_now, httponly: true }
     cookies.encrypted[:signed_user] = user.signed_id(expires_in: 2.months, purpose: :signin_avatar)
     user_session = user.user_sessions.build(
       session_token:,
@@ -50,10 +53,12 @@ module SessionsHelper
 
     if impersonate
       user_session.impersonated_by = current_user
+    else
+      raise(AccountLockedError, "Your HCB account has been locked.") if user.locked?
     end
 
     user_session.save!
-    self.current_user = user
+    Current.session = user_session
 
     user_session
   end
@@ -74,10 +79,6 @@ module SessionsHelper
     signed_in? &&
       current_user&.superadmin? &&
       !current_session&.impersonated?
-  end
-
-  def current_user=(user)
-    @current_user = user
   end
 
   def organizer_signed_in?(event = @event, as: :reader)
@@ -116,22 +117,15 @@ module SessionsHelper
   end
 
   def current_session
-    return @current_session if defined?(@current_session)
-
-    session_token = cookies.encrypted[:session_token]
-
-    return nil if session_token.nil?
-
-    # Find a valid session (not expired) using the session token
-    @current_session = UserSession.not_expired.find_by(session_token:)
+    Current.session
   end
 
   def signed_in_user
     unless signed_in?
       if request.fullpath == "/"
-        redirect_to auth_users_path(require_reload: true)
+        redirect_to auth_users_path(require_reload: true, signup: params[:signup])
       else
-        redirect_to auth_users_path(return_to: request.original_url, require_reload: true)
+        redirect_to auth_users_path(return_to: request.original_url, require_reload: true, signup: params[:signup])
       end
     end
   end
@@ -143,13 +137,10 @@ module SessionsHelper
   end
 
   def sign_out
-    current_user
-      &.user_sessions
-      &.find_by(session_token: cookies.encrypted[:session_token])
-      &.update(signed_out_at: Time.now, expiration_at: Time.now)
+    current_session&.update(signed_out_at: Time.now, expiration_at: Time.now)
 
     cookies.delete(:session_token)
-    self.current_user = nil
+    Current.session = nil
   end
 
   def sign_out_of_all_sessions(user = current_user)

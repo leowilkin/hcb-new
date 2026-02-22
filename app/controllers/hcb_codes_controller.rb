@@ -3,11 +3,12 @@
 class HcbCodesController < ApplicationController
   include TagsHelper
 
-  skip_before_action :signed_in_user, only: [:receipt, :attach_receipt, :show]
-  skip_after_action :verify_authorized, only: [:receipt]
+  skip_before_action :signed_in_user, only: [:receipt, :attach_receipt, :receipt_status, :show]
+  skip_after_action :verify_authorized, only: [:receipt, :receipt_status]
 
   def show
     @hcb_code = HcbCode.find_by(hcb_code: params[:id]) || HcbCode.find(params[:id])
+    authorize @hcb_code
     @event =
       begin
         # Attempt to retrieve the event using the context of the
@@ -31,8 +32,6 @@ class HcbCodesController < ApplicationController
     hcb = @hcb_code.hcb_code
     hcb_id = @hcb_code.hashid
 
-    authorize @hcb_code
-
     return not_found if @hcb_code.unused?
 
     if params[:show_details] == "true" && @hcb_code.ach_transfer?
@@ -40,10 +39,13 @@ class HcbCodesController < ApplicationController
       @show_ach_details = true
     end
 
+    @reverse_receipt_id = params[:reverse]
+
     if params[:frame]
       @frame = true
       @transaction_show_receipt_button = params[:transaction_show_receipt_button].nil? ? false : params[:transaction_show_receipt_button]
       @transaction_show_author_img = params[:transaction_show_author_img].nil? ? false : params[:transaction_show_author_img]
+      @ledger_instance = params[:ledger_instance]
 
       render :show, layout: false
     else
@@ -51,8 +53,15 @@ class HcbCodesController < ApplicationController
       render :show
     end
   rescue Pundit::NotAuthorizedError => e
-    if @hcb_code.stripe_card.card_grant.present? && current_user == @hcb_code.stripe_card.card_grant.user
+    if @hcb_code.stripe_card&.card_grant.present? && current_user == @hcb_code.stripe_card.card_grant.user
       redirect_to card_grant_path(@hcb_code.stripe_card.card_grant, frame: params[:frame])
+    elsif @hcb_code.outgoing_disbursement?
+      incoming_hcb_code = @hcb_code.outgoing_disbursement.disbursement.incoming_disbursement.local_hcb_code
+      if signed_in? && HcbCodePolicy.new(current_user, incoming_hcb_code).show?
+        redirect_to hcb_code_path(incoming_hcb_code.hashid)
+      else
+        raise
+      end
     else
       raise unless @event.is_public? && !params[:redirect_to_sign_in]
 
@@ -199,6 +208,19 @@ class HcbCodesController < ApplicationController
     end
   end
 
+  def receipt_status
+    @secret = params[:s]
+    @hcb_code = HcbCode.find_signed(@secret, purpose: :receipt_status)
+
+    if @hcb_code.nil?
+      raise Pundit::NotAuthorizedError
+    end
+
+    file_name = @hcb_code.missing_receipt? ? "receipt_status_upload.png" : "receipt_status_uploaded.png"
+
+    send_file Rails.root.join("app", "assets", "images", file_name), type: "image/png", disposition: "inline"
+  end
+
   def toggle_tag
     hcb_code = HcbCode.find(params[:id])
     tag = Tag.find(params[:tag_id])
@@ -236,7 +258,7 @@ class HcbCodesController < ApplicationController
 
     authorize hcb_code
 
-    if hcb_code.amount_cents >= -100
+    if hcb_code.amount_cents > -100
       flash[:error] = "Invoices can only be generated for charges of $1.00 or more."
       return redirect_to hcb_code
     end

@@ -19,8 +19,8 @@ class ReceiptablesController < ApplicationController
   private
 
   RECEIPTABLE_TYPE_MAP = [HcbCode, CanonicalTransaction, Transaction, StripeAuthorization,
-                          EmburseTransaction, Reimbursement::Expense, Reimbursement::Expense::Mileage,
-                          Api::Models::CardCharge].index_by(&:to_s).freeze
+                          EmburseTransaction, Reimbursement::Expense, Reimbursement::Expense::Mileage, Reimbursement::Expense::Fee,
+                          Api::Models::CardCharge, Ledger::Item].index_by(&:to_s).freeze
 
   def set_receiptable
     return unless RECEIPTABLE_TYPE_MAP[params[:receiptable_type]]

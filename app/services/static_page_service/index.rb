@@ -22,6 +22,14 @@ module StaticPageService
       @current_user.organizer_position_invites.pending
     end
 
+    def invite_requests
+      @current_user.organizer_position_invite_requests.pending
+    end
+
+    def applications
+      @current_user.applications.active
+    end
+
     # Counts
 
     def checks_count

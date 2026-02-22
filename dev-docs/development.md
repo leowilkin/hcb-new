@@ -1,6 +1,6 @@
 # Development
 
-We recommend using Docker to get an instance running locally. It should work out-of-the-box and is how most contributors work on HCB.
+We recommend using GitHub Codespaces to get an instance running. It should work out-of-the-box and is how most contributors work on HCB.
 
 - [Running HCB locally](#running-hcb-locally)
   - [Quickstart with GitHub Codespaces](#quickstart-with-github-codespaces)
@@ -13,6 +13,9 @@ We recommend using Docker to get an instance running locally. It should work out
 ## Running HCB locally
 
 Once HCB is running locally, log in into your local instance using the email `admin@bank.engineering`. Use [Letter Opener](https://github.com/ryanb/letter_opener) to access the development email outbox and retrieve the login code. Letter Opener can be accessed at [`localhost:3000/letter_opener`](localhost:3000/letter_opener).
+
+## Code style
+Thank you for contributing! Please make sure to follow the code style guide [here](/dev-docs/code_style.md).
 
 ### Quickstart with GitHub Codespaces
 
@@ -165,10 +168,6 @@ HCB has a limited set of tests created using [RSpec](https://rspec.info/). Run t
 bundle exec rspec
 ```
 
-### Staging access
-
-All PRs are deployed in a staging enviroment using Heroku. Login using the email `staging@bank.engineering`. Visit [`#hcb-staging`](https://hackclub.slack.com/archives/C07KLU4B0M7) on the [Hack Club Slack](https://hackclub.com/slack) for the code.
-
 ## Credentials
 
 External contributors should provide credentials via a [`.env.development`](/.env.development) file [(view example)](/.env.development.example). Developers using the `devcontainer` setup (eg. in GitHub Codespaces), will need to rebuild the container after modifying the [`.env.development`](/.env.development) file to pull in the new variables.
@@ -209,7 +208,7 @@ pg_restore --verbose --clean --no-acl --no-owner -h localhost -U postgres -d ban
 
 ## Getting an OAuth token
 
-There is two different ways you can accomplish the first step of getting an OAuth token, either using a webpage, or the terminal depending on your preference.
+There are two different ways you can accomplish the first step of getting an OAuth token, either using a webpage, or the terminal depending on your preference. Both described here use the `authorization_code` grant type, but HCB also supports the `device_code` grant type. See the [device grant gem docs](https://github.com/exop-group/doorkeeper-device_authorization_grant#usage) for instructions on how to use this flow, keeping in mind that HCB uses a scope of `api/v4/oauth` instead of just `oauth`.
 
 1. Go to [localhost:3000/api/v4/oauth/applications](http://localhost:3000/api/v4/oauth/applications). Press "New Application" and then set the name to anything of your choosing, the redirect URI to [`http://localhost:3000/`](http://localhost:3000/), and scopes to `read write`. For the purposes of this guide, you should leave confidential checked (see more context [here](oauth.net/2/client-types)). Press "Submit" and then save the info on the new page that appears and press "Authorize."
 

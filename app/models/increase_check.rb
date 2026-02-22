@@ -21,22 +21,24 @@
 #  increase_status         :string
 #  memo                    :string
 #  payment_for             :string
-#  recipient_name          :string
 #  recipient_email         :string
+#  recipient_name          :string
 #  send_email_notification :boolean          default(FALSE)
 #  created_at              :datetime         not null
 #  updated_at              :datetime         not null
 #  column_id               :string
 #  event_id                :bigint           not null
 #  increase_id             :string
+#  payment_recipient_id    :bigint
 #  user_id                 :bigint
 #
 # Indexes
 #
-#  index_increase_checks_on_column_id       (column_id) UNIQUE
-#  index_increase_checks_on_event_id        (event_id)
-#  index_increase_checks_on_transaction_id  ((((increase_object -> 'deposit'::text) ->> 'transaction_id'::text)))
-#  index_increase_checks_on_user_id         (user_id)
+#  index_increase_checks_on_column_id             (column_id) UNIQUE
+#  index_increase_checks_on_event_id              (event_id)
+#  index_increase_checks_on_payment_recipient_id  (payment_recipient_id)
+#  index_increase_checks_on_transaction_id        ((((increase_object -> 'deposit'::text) ->> 'transaction_id'::text)))
+#  index_increase_checks_on_user_id               (user_id)
 #
 # Foreign Keys
 #
@@ -53,6 +55,7 @@ class IncreaseCheck < ApplicationRecord
   include AASM
   include Payoutable
   include Freezable
+  include Payment
 
   include PgSearch::Model
   pg_search_scope :search_recipient, against: [:recipient_name, :memo], using: { tsearch: { prefix: true, dictionary: "english" } }, ranked_by: "increase_checks.created_at"
@@ -60,8 +63,15 @@ class IncreaseCheck < ApplicationRecord
   include PublicActivity::Model
   tracked owner: proc{ |controller, record| controller&.current_user }, event_id: proc { |controller, record| record.event.id }, only: [:create]
 
+  include PublicIdentifiable
+  set_public_id_prefix :ick
+
   belongs_to :event
   belongs_to :user, optional: true
+
+  def payment_recipient_attributes
+    %i[address_line1 address_line2 address_city address_state address_zip]
+  end
 
   has_one :canonical_pending_transaction
   has_one :employee_payment, class_name: "Employee::Payment", as: :payout
@@ -92,7 +102,7 @@ class IncreaseCheck < ApplicationRecord
       transitions from: :pending, to: :approved
 
       after_commit do
-        IncreaseCheckMailer.with(check: self).notify_recipient.deliver_later
+        IncreaseCheckMailer.with(check: self).notify_recipient.deliver_later unless reimbursement_payout_holding.present?
         employee_payment.mark_paid! if employee_payment.present?
       end
     end
@@ -131,8 +141,9 @@ class IncreaseCheck < ApplicationRecord
     end
   end
 
-  scope :in_transit, -> { where(increase_status: [:pending_submission, :submitting, :submitted, :pending_mailing, :mailed]) }
-  scope :canceled, -> { where(increase_status: [:rejected, :canceled, :stopped, :returned, :rejected]).or(where(aasm_state: :rejected)) }
+  scope :deposited, -> { where(increase_status: :deposited).or(where(column_status: :settled)) }
+  scope :in_transit, -> { where(increase_status: [:pending_submission, :submitting, :submitted, :pending_mailing, :mailed]).or(where(column_status: [:initiated, :issued, :pending_deposit, :pending_first_return, :first_return, :pending_reclear, :pending_second_return, :second_return, :user_initiated_return_submitted, :user_initiated_returned, :user_initiated_return_dishonored, :manual_review])) }
+  scope :canceled, -> { where(increase_status: [:rejected, :canceled, :stopped, :returned, :rejected]).or(where(aasm_state: :rejected)).or(where(column_status: [:pending_stop, :stopped, :rejected])) }
 
   enum :increase_status, {
     pending_approval: "pending_approval",
@@ -149,8 +160,38 @@ class IncreaseCheck < ApplicationRecord
     requires_attention: "requires_attention"
   }, prefix: :increase
 
-  enum :column_status, %w(initiated issued manual_review rejected pending_deposit pending_stop deposited stopped pending_first_return pending_second_return first_return pending_reclear recleared second_return settled returned pending_user_initiated_return user_initiated_return_submitted user_initiated_returned pending_user_initiated_return_dishonored).index_with(&:itself), prefix: :column
-  enum :column_delivery_status, %w(created mailed rendered_pdf in_transit in_local_area processed_for_delivery delivered failed rerouted returned_to_sender).index_with(&:itself), prefix: :column_delivery
+  # https://column.com/docs/checks/notifications-and-states#states-and-events
+  enum :column_status, %w[
+    initiated
+    issued
+    pending_deposit
+    settled
+    pending_first_return
+    first_return
+    pending_reclear
+    pending_second_return
+    second_return
+    user_initiated_return_submitted
+    user_initiated_returned
+    user_initiated_return_dishonored
+    pending_stop
+    stopped
+    manual_review
+    rejected
+  ].index_with(&:itself), prefix: :column
+
+  enum :column_delivery_status, %w[
+    created
+    rendered_pdf
+    mailed
+    in_transit
+    in_local_area
+    processed_for_delivery
+    delivered
+    rerouted
+    returned_to_sender
+    failed
+  ].index_with(&:itself), prefix: :column_delivery
 
   VALID_DURATION = 180.days
 
@@ -200,13 +241,8 @@ class IncreaseCheck < ApplicationRecord
 
   alias_attribute :name, :recipient_name
 
-  def hcb_code
-    "HCB-#{TransactionGroupingEngine::Calculate::HcbCode::INCREASE_CHECK_CODE}-#{id}"
-  end
-
-  def local_hcb_code
-    @local_hcb_code ||= HcbCode.find_or_create_by(hcb_code:)
-  end
+  include HasHcbCode
+  has_hcb_code TransactionGroupingEngine::Calculate::HcbCode::INCREASE_CHECK_CODE
 
   def sent?
     approved?
@@ -225,11 +261,11 @@ class IncreaseCheck < ApplicationRecord
   end
 
   def reissue!
-    return unless column_id.present? && column_issued?
+    return unless column_id.present? && (column_issued? || column_stopped?)
 
     stopped_id = column_id
 
-    ColumnService.post("/transfers/checks/#{stopped_id}/stop-payment", idempotency_key: "stop_#{stopped_id}")
+    ColumnService.post("/transfers/checks/#{stopped_id}/stop-payment", idempotency_key: "stop_#{stopped_id}") unless column_stopped?
 
     update!(
       column_id: nil,

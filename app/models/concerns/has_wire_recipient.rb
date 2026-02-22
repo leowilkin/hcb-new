@@ -15,13 +15,13 @@ module HasWireRecipient
     end
 
     validate do
-      if IBAN_FORMATS[bank_country.to_sym] && !account_number.match(IBAN_FORMATS[bank_country.to_sym])
+      if bank_country && IBAN_FORMATS[bank_country.to_sym] && !account_number.match(IBAN_FORMATS[bank_country.to_sym])
         errors.add(:account_number, "does not meet the required format for this country")
       end
     end
 
     validate do
-      if POSTAL_CODE_FORMATS[recipient_country.to_sym] && !address_postal_code.match(POSTAL_CODE_FORMATS[recipient_country.to_sym])
+      if recipient_country && POSTAL_CODE_FORMATS[recipient_country.to_sym] && !address_postal_code.match(POSTAL_CODE_FORMATS[recipient_country.to_sym])
         errors.add(:address_postal_code, "does not meet the required format for this country")
       end
     end
@@ -383,4 +383,6 @@ module HasWireRecipient
   def bank_country
     ColumnService.get("/institutions/#{bic_code}")["country_code"] rescue recipient_country
   end
+
+  AVAILABLE_CURRENCIES = (::EuCentralBank::CURRENCIES + ["EUR"] + WiseTransfer::AVAILABLE_CURRENCIES + ["UGX"]).uniq
 end

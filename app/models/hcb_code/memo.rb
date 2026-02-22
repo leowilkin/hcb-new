@@ -9,7 +9,8 @@ class HcbCode
         return custom_memo if custom_memo.present?
 
         return card_grant_memo if card_grant?
-        return disbursement_memo(event:) if disbursement?
+        return incoming_disbursement_memo if incoming_disbursement?
+        return outgoing_disbursement_memo if outgoing_disbursement?
         return invoice_memo if invoice?
         return donation_memo if donation?
         return bank_fee_memo if bank_fee?
@@ -26,6 +27,8 @@ class HcbCode
         return outgoing_fee_reimbursement_memo if outgoing_fee_reimbursement?
         return stripe_card_memo if stripe_card? && stripe_card_memo
         return wire_memo if wire?
+        return wise_transfer_memo if wise_transfer?
+        return stripe_service_fee_memo if stripe_service_fee?
 
         ct.try(:smart_memo) || pt.try(:smart_memo) || ""
       end
@@ -35,20 +38,21 @@ class HcbCode
       end
 
       def card_grant_memo
-        "Grant to #{disbursement.card_grant.user.name}".strip
+        "Grant to #{outgoing_disbursement.card_grant.user.name}".strip
       end
 
-      def disbursement_memo(event: nil)
-        return disbursement.special_appearance_memo if disbursement.special_appearance_memo
+      def incoming_disbursement_memo
+        return incoming_disbursement.special_appearance_memo if incoming_disbursement.special_appearance_memo
 
-        if event == disbursement.source_event
-          "Transfer to #{disbursement.destination_event.name}".strip
-        elsif event == disbursement.destination_event
-          "Transfer from #{disbursement.source_event.name}".strip
-        else
-          "Transfer from #{disbursement.source_event.name} to #{disbursement.destination_event.name}".strip
-        end
+        "Transfer from #{incoming_disbursement.source_event.name}".strip
+      end
 
+      def outgoing_disbursement_memo
+        return outgoing_disbursement.special_appearance_memo if outgoing_disbursement.special_appearance_memo
+
+        # "Transfer to #{outgoing_disbursement.destination_event.name}".strip
+        # replace the below with ^ after migration.
+        "Transfer from #{outgoing_disbursement.disbursement.source_event.name} to #{outgoing_disbursement.disbursement.destination_event.name}".strip
       end
 
       def invoice_memo
@@ -90,7 +94,7 @@ class HcbCode
       end
 
       def outgoing_fee_reimbursement_memo
-        "🗂️ Stripe fee reimbursements for #{ct.date.beginning_of_week.strftime("%-m/%-d")} to #{ct2.date.beginning_of_week.strftime("%-m/%-d")}"
+        "🗂️ Stripe fee reimbursements for week of #{ct.date.beginning_of_week.strftime("%-m/%-d")}"
       end
 
       def reimbursement_payout_holding_memo
@@ -109,8 +113,16 @@ class HcbCode
         YellowPages::Merchant.lookup(network_id: stripe_merchant["network_id"]).name || stripe_merchant["name"]
       end
 
+      def stripe_service_fee_memo
+        stripe_service_fee.stripe_description
+      end
+
       def wire_memo
         "Wire to #{wire.recipient_name}"
+      end
+
+      def wise_transfer_memo
+        "Wise transfer to #{wise_transfer.recipient_name}"
       end
 
     end
