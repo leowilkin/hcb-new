@@ -24,9 +24,10 @@
 class MailboxAddress < ApplicationRecord
   DISCRIMINATOR_LENGTH = 4 # currently, 4 is enough to avoid most collisions, however this can be increased later
   EMAIL_DOMAIN = "hcb.gg"
+  SPECIAL_IDENTIFIERS = %w[leo].freeze # Special-case email addresses that bypass the standard animal.NNNN format. These are reserved for specific users/purposes (e.g., leo@hcb.gg)
 
-  VALIDATION_REGEX = /\A[a-z]+\.\d{#{DISCRIMINATOR_LENGTH}}@#{Regexp.escape(EMAIL_DOMAIN)}\z/
-
+  VALIDATION_REGEX = /\A(?:[a-z]+\.\d{#{DISCRIMINATOR_LENGTH}}|#{SPECIAL_IDENTIFIERS.join('|')})@#{Regexp.escape(EMAIL_DOMAIN)}\z/
+  
   belongs_to :user
   validates :user, uniqueness: { scope: [:aasm_state, :user_id, :discarded_at], message: "can only have one mailbox address previewed/active at a time" }
 
