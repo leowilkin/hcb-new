@@ -8,7 +8,7 @@ gem "dotenv-rails", groups: [:development, :test]
 
 gem "rails", git: "https://github.com/rails/rails.git", branch: "7-2-stable"
 
-gem "puma", "~> 6.6" # app server
+gem "puma", "~> 7.2", ">= 7.2.1" # app server
 
 gem "pg", ">= 0.18", "< 2.0" # database
 gem "redis", "~> 5.4" # for caching, jobs, etc.
